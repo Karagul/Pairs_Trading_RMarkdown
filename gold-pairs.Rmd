@@ -1,0 +1,110 @@
+---
+title: "Pair Trading of GLD and GDX"
+output:
+  html_document:
+    df_print: paged
+---
+
+## Example 3.6: 
+#### Pair Trading of GLD and GDX
+
+GLD versus GDX is a good candidate for pair trading because GLD reflects the spot price of gold, and GDX is a basket of gold-mining stocks. It makes intuitive sense that their prices should move in tandem.
+
+(also see, e.g., epchan.blogspot.com/2006/11/reader-suggested-possible-trading.html)
+
+
+We perform a regression analysis on the training set to determine the hedge ratio between GLD and GDX, and then define entry and exit thresholds for a pair-trading strategy.
+
+We will see how optimiz- ing these thresholds on the training set changes the performance on the test set.
+
+
+```{r}
+library(quantmod)
+smbls <- c("GLD", "GDX")
+getSymbols(smbls, auto.assign = T)
+```
+
+```{r}
+n <- length(GDX$GDX.Adjusted)
+upper <- round(length(GDX$GDX.Adjusted)*.8)
+index(GDX[upper,])
+train <- 1:upper
+test <- (upper+1):n
+
+gold_prices <- merge(GLD$GLD.Adjusted, GDX$GDX.Adjusted)
+colnames(gold_prices) <- smbls
+
+gold_lret <- diff(log(gold_prices))
+gold_lret_train <- gold_lret[train,]
+gold_lret_test <- gold_lret[test,]
+
+head(gold_lret_train)
+head(gold_lret_test)
+```
+
+```{r}
+plot.zoo(gold_prices, plot.type = "single", col=2:3, ylab = "price", xlab = "time", main = "Price over Time")
+legend("topleft", smbls, pch = 10, col = 2:3)
+
+plot.zoo(gold_lret, plot.type = "multiple", col=2:3, xlab = "time", main = "Log-Returns over Time")
+```
+
+```{r}
+results <- lm(gold_prices$GLD ~ gold_prices$GDX)
+hedge_ratio <- results$coefficients[1]
+spread=gold_prices$GLD-hedge_ratio*gold_prices$GDX
+
+plot.zoo(spread[train,])
+plot.zoo(spread[test,])
+
+spread_mean <- mean(spread[train,]);
+spread_sd <- sd(spread[train,]);
+zscore <- (spread - spread_mean)/spread_sd;
+
+# buy spread when its value drops below 2 standard deviations.
+longs <- zscore <= -1
+
+# short spread when its value rises above 2 standard deviations.
+shorts <- zscore >= 1
+# exit any spread position when its value is within 1 standard deviation of its mean. 
+exits <- abs(zscore) <= 0.5
+
+# initialize positions array 
+pos <- xts(rep(NA, n), order.by = index(gold_prices))
+positions <- merge(pos, pos)
+colnames(positions) <- smbls
+
+# long entries
+positions[shorts, ] <- matrix(rep(c(-1,1), length(which(shorts))), ncol =2, byrow = T)
+# short entries
+positions[longs,  ] <- matrix(rep(c(-1,1), length(which(longs))), ncol =2, byrow = T)
+# View(positions["2010-11/12"])
+# View(longs["2010-11/12"])
+
+# exit positions
+positions[exits,  ] <- matrix(rep(c(0, 0), length(which(exits))), ncol =2, byrow = T)
+
+positions = na.locf(positions)
+```
+
+
+```{r}
+daily_ret <- (gold_prices - lag(gold_prices))/lag(gold_prices)
+daily_ret <- daily_ret[-1]
+
+plot.zoo(daily_ret, plot.type = "multiple", col=2:3, xlab = "time", main = "Log-Returns over Time")
+
+pnl <- lag(positions)*daily_ret
+
+# the Sharpe ratio on the training set should be about 2.3
+sharpe_train <- sqrt(252)*mean(pnl[train[-1],]/sd(pnl[train[-1],]))
+sharpe_train
+
+
+# the Sharpe ratio on the test set should be about 1.5
+sharpe_testset=sqrt(252)*mean(pnl[test-1,])/sd(pnl[test-1,])
+plot.zoo(cumsum(pnl[test-1,]), plot.type = "single", col=2:3, ylab = "price", xlab = "time", main = "Price over Time")
+legend("topleft", smbls, pch = 10, col = 2:3)
+sharpe_testset
+```
+
